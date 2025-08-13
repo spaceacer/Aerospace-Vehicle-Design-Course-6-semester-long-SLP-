@@ -1,0 +1,805 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # registers the 3d projection
+import ipywidgets as widgets
+from ipywidgets import interact, interactive, FloatSlider, Dropdown, Checkbox, VBox, HBox, Label # Import interactive
+from IPython.display import display, clear_output, HTML
+
+# --- Constants ---
+# Standard gravity at sea level (m/s^2)
+g0 = 9.80665
+# Density of Liquid Oxygen (kg/m^3)
+rho_lox = 1141
+# Density of Liquid Hydrogen (kg/m^3)
+rho_lh2 = 71
+# Density of Liquid Methane (kg/m^3)
+rho_lch4 = 422
+
+# --- Output Widgets ---
+# HTML widget to display formatted text summary
+# Removed max_height and overflow to remove the scrollbar
+html_output = widgets.HTML(layout={'border': '0px', 'padding': '8px'})
+plot_output = widgets.Output(layout={'border': '0px'})
+
+# --- Helper Function: Equal Axis Scaling for 3D Plots ---
+# This function adjusts the limits of a 3D plot to ensure equal scaling along all axes,
+# preventing distortion and providing a true representation of the object's shape.
+def set_axes_equal(ax):
+    # From Matplotlib docs / common recipe
+    x_limits = ax.get_xlim3d()
+    y_limits = ax.get_ylim3d()
+    z_limits = ax.get_zlim3d()
+    x_range = abs(x_limits[1] - x_limits[0])
+    x_middle = np.mean(x_limits)
+    y_range = abs(y_limits[1] - y_limits[0])
+    y_middle = np.mean(y_limits)
+    z_range = abs(z_limits[1] - z_limits[0])
+    z_middle = np.mean(z_limits)
+    # The plot radius is half the max-range
+    plot_radius = 0.5 * max([x_range, y_range, z_range])
+    ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
+    ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
+    ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+
+# --- Helper Function: Build HTML Summary String ---
+# This function takes keyword arguments (design parameters and calculated properties)
+# and formats them into an HTML string using <pre> tags for monospace alignment.
+def build_summary_html(**kwargs):
+    # create a clean borderless "table-like" HTML using <pre> for monospace alignment
+    lines = []
+    lines.append("<pre style='font-family: monospace; margin:0; white-space: pre;'>")
+    lines.append("----- Spaceplane Design Summary -----")
+    # Use the calculated fuselage length in the summary
+    lines.append(f"Fuselage Length:          {kwargs['fuselage_length_calc']:.2f} m")
+    lines.append(f"Fuselage Diameter:        {kwargs['fuselage_diameter']:.2f} m")
+    lines.append(f"Nose Length:              {kwargs['nose_length']:.2f} m ({kwargs['nose_shape']})")
+    lines.append(f"Engine Length:            {kwargs['engine_length']:.2f} m")
+    lines.append("")
+    lines.append("--- Propellant & Tank Properties ---")
+    lines.append(f"Propellant Type:          {kwargs['propellant_type']}")
+    lines.append(f"Total Propellant Mass:    {kwargs['total_propellant_mass']:.2f} kg")
+    lines.append(f"  LOX Mass:               {kwargs['lox_mass']:.2f} kg")
+    # Check propellant type to display correct fuel mass label
+    if kwargs['propellant_type'] == 'LH2/LOx':
+        lines.append(f"  LH2 Mass:               {kwargs['lh2_mass']:.2f} kg")
+        lines.append(f"  Fuel Density:           {kwargs['fuel_density']} kg/m³")
+    else: # Assuming LCH4/LOx or unknown
+        lines.append(f"  Fuel Mass:              {kwargs['fuel_mass']:.2f} kg")
+        lines.append(f"  Fuel Density:           {kwargs['fuel_density']} kg/m³")
+    lines.append(f"LOX Tank Length:          {kwargs['lox_length']:.2f} m")
+    lines.append(f"Fuel Tank Length:         {kwargs['fuel_length']:.2f} m")
+    lines.append("")
+    lines.append("--- Wing Properties ---")
+    lines.append(f"Wing Position (LE root):  {kwargs['wing_position_x']:.2f} m")
+    lines.append(f"Wing Span:                {kwargs['wing_span']:.2f} m")
+    lines.append(f"Wing Root Chord:          {kwargs['wing_root_chord']:.2f} m")
+    lines.append(f"Wing Tip Chord:           {kwargs['wing_tip_chord']:.2f} m")
+    lines.append(f"Wing Sweep (LE):         {kwargs['wing_sweep_deg']:.1f}°")
+    lines.append(f"Wing Dihedral:            {kwargs['wing_dihedral_deg']:.1f}°") # Added dihedral to summary
+    lines.append(f"Wing Attachment Z:        {kwargs['wing_attach_z']:.2f} m") # Added attachment Z to summary
+    lines.append(f"Wing Thickness Ratio:     {kwargs['wing_thickness_ratio']:.3f}")
+    lines.append(f"Wing Area (Total):        {kwargs['S_total_wing_area_calc']:.2f} m²")
+    lines.append(f"Aspect Ratio (AR):        {kwargs['AR_calc']:.2f}")
+    lines.append(f"Wing Mass per Area:       {kwargs['wing_mass_per_area']:.2f} kg/m²") # Added wing mass per area
+    lines.append("")
+    lines.append("--- Vertical Stabilizer Properties ---") # Added section header
+    lines.append(f"Tail Height:              {kwargs['tail_height']:.2f} m") # Added tail height
+    lines.append(f"Tail Root Chord:          {kwargs['tail_root_chord']:.2f} m") # Added tail root chord
+    lines.append(f"Tail Tip Chord:           {kwargs['tail_tip_chord']:.2f} m") # Added tail tip chord
+    lines.append(f"Tail Sweep (LE):         {kwargs['tail_sweep_deg']:.1f}°") # Added tail sweep
+    lines.append(f"Tail Thickness Ratio:     {kwargs['tail_thickness_ratio']:.3f}") # Added tail thickness ratio
+    lines.append(f"Tail Attachment Z:        {kwargs['tail_attach_z']:.2f} m") # Added tail attach Z
+    lines.append(f"Tail Position (rel. end): {kwargs['tail_pos_rel_end']:.2f} m") # Added tail position relative to end
+    lines.append("")
+    lines.append("--- Mass Properties ---")
+    lines.append(f"Payload Mass:             {kwargs['payload_mass']:.2f} kg") # Added payload mass
+    lines.append(f"LOX Tank Dry Mass:        {kwargs['lox_mass_tank']:.2f} kg ({kwargs['lox_t_mm']:.2f} mm wall)")
+    lines.append(f"Fuel Tank Dry Mass:       {kwargs['fuel_mass_tank']:.2f} kg ({kwargs['fuel_t_mm']:.2f} mm wall)")
+    lines.append(f"Fuselage Dry Mass:        {kwargs['fuselage_dry_mass']:.2f} kg") # Added fuselage mass
+    lines.append(f"Wing Dry Mass:            {kwargs['wing_dry_mass']:.2f} kg") # Added wing mass
+    lines.append(f"Engine Dry Mass:          {kwargs['engine_dry_mass']:.2f} kg") # Added engine mass
+    lines.append("-------------------------------------")
+    lines.append(f"Total Dry Mass:           {kwargs['total_dry_mass']:.2f} kg") # Added total dry mass
+    lines.append(f"GLOW (Gross Lift-Off Wt): {kwargs['glow']:.2f} kg") # Added GLOW
+    lines.append("</pre>")
+    return "\n".join(lines)
+
+# --- Main Function: Plot Spaceplane Fuselage in 3D and Calculate Properties ---
+# This function is linked to the ipywidgets sliders and updates the visualization
+# and summary whenever a slider value changes.
+def plot_spaceplane_fuselage_3d(
+    # remove fuselage_length as parameter — we compute it from component extents
+    fuselage_diameter=2.0,
+    nose_length=3.0,
+    nose_shape='Conical',
+    payload_mass=1000.0,
+    payload_start=3.0,
+    payload_length=2.0, # Keep length for now, we can change to end pos later if preferred
+    payload_width=1.5,
+    payload_height=1.5,
+    total_propellant_mass=2400.0,
+    propellant_type='LH2/LOx',
+    lox_start=6.0,
+    # lh2_start=9.5, # This will be handled by link_tanks or a separate slider
+    fuel_start=9.5, # Renamed for clarity and independent positioning
+    engine_length=1.5,
+    link_tanks=False,
+    tank_pressure_mpa=0.2,
+    wing_span=10.0,
+    wing_root_chord=6.0,
+    wing_tip_chord=1.5,
+    wing_sweep_deg=45.0,
+    wing_dihedral_deg=5.0, # Added dihedral angle slider
+    wing_thickness_ratio=0.1,
+    wing_attach_z=0.0, # Added wing attachment Z slider (0 is centerline)
+    wing_mass_per_area=50.0, # New parameter for wing mass per area
+    tail_height=2.4, # New: Vertical Stabilizer Height slider
+    tail_root_chord=2.25, # New: Vertical Stabilizer Root Chord slider
+    tail_tip_chord=1.35, # New: Vertical Stabilizer Tip Chord slider
+    tail_sweep_deg=30.0, # New: Vertical Stabilizer Sweep slider
+    tail_thickness_ratio=0.08, # New: Vertical Stabilizer Thickness Ratio slider
+    tail_attach_z=1.0, # New: Vertical Stabilizer Attachment Z slider
+    tail_pos_rel_end=-1.1, # New: Tail Position relative to fuselage end
+    nose_gear_pos_x=2.0, # New: Nose gear X position
+    main_gear_pos_x=25.0, # New: Main gear X position
+    main_gear_pos_y=1.5, # New: Main gear Y position (lateral)
+    opacity=0.4 # Opacity for the 3D model components
+):
+    # Clear previous output in the HTML and plot widgets
+    html_output.value = ""
+    plot_output.clear_output(wait=True)
+
+    # Derived geometric parameters
+    radius = fuselage_diameter / 2
+    wing_sweep_rad = np.radians(wing_sweep_deg)
+    wing_dihedral_rad = np.radians(wing_dihedral_deg) # Convert dihedral to radians
+    tail_sweep_rad = np.radians(tail_sweep_deg) # Convert tail sweep to radians # Moved calculation here
+
+
+    # Propellant and tank calculations based on type and total mass
+    of_ratio = {
+        'LH2/LOx': 6.0,
+        'LCH4/LOx': 3.5
+    }
+    selected_of_ratio = of_ratio.get(propellant_type, 6.0)
+    oxidizer_mass = (selected_of_ratio / (selected_of_ratio + 1)) * total_propellant_mass
+    fuel_mass = total_propellant_mass - oxidizer_mass
+
+    lox_mass = oxidizer_mass
+    # Determine fuel type and density based on selection
+    if propellant_type == 'LH2/LOx':
+        lh2_mass = fuel_mass
+        lch4_mass = 0
+        fuel_density = rho_lh2
+        fuel_label = 'LH₂ Tank'
+    elif propellant_type == 'LCH4/LOx':
+        lch4_mass = fuel_mass
+        lh2_mass = 0
+        fuel_density = rho_lch4
+        fuel_label = 'LCH₄ Tank'
+    else: # Default or handle other cases
+        lh2_mass = fuel_mass
+        lch4_mass = 0
+        fuel_density = rho_lh2
+        fuel_label = 'Fuel Tank (Unknown Type)'
+
+    # Helper function to calculate tank length based on mass and density
+    def tank_length(mass, density):
+        volume = mass / density
+        # Avoid division by zero if radius or density is zero
+        if radius == 0 or density == 0:
+            return 0
+        return volume / (np.pi * radius**2)
+
+    # Calculate tank lengths
+    lox_length = tank_length(lox_mass, rho_lox)
+    fuel_length = tank_length(fuel_mass, fuel_density)
+
+    # --- Handle Linked Tanks Positioning ---
+    current_fuel_start = fuel_start # Use the slider value by default
+    if link_tanks:
+        # If tanks are linked, the fuel tank starts immediately after the LOX tank
+        current_fuel_start = lox_start + lox_length
+
+
+    # --- Calculate Fuselage Length ---
+    # Estimate fuselage length based on component positions and lengths
+    payload_end = payload_start + payload_length
+    lox_end = lox_start + lox_length
+    fuel_end = current_fuel_start + fuel_length # Use current_fuel_start
+
+    # Fuselage length is the maximum extent of components from nose tip (x=0) + engine length
+    fuselage_length_calc = max(nose_length, payload_end, lox_end, fuel_end) + engine_length
+    # If tanks are linked, adjust the length calculation
+    if link_tanks:
+        # Assuming linked tanks are LOX followed by Fuel
+        linked_tanks_end = lox_start + lox_length + fuel_length
+        fuselage_length_calc = max(nose_length, payload_end, linked_tanks_end) + engine_length
+        # Also update the fuel tank start position for visualization if linked
+        # This variable name "lh2_start" is inconsistent, should use current_fuel_start
+        # Let's keep using current_fuel_start consistently for plotting
+        pass # No need to update lh2_start here
+
+
+    rho_material = 2700
+    yield_strength = 370e6
+    SF = 1.5
+    sigma_allow = yield_strength / SF
+    P_design = tank_pressure_mpa * 1e6
+
+    # Helper function to estimate tank dry mass and wall thickness
+    def tank_mass(radius_local, length_local):
+        # Avoid division by zero if allowable stress is zero
+        if sigma_allow == 0:
+            return float('inf'), 0
+        # Calculate wall thickness based on hoop stress formula (simplified)
+        t = (P_design * radius_local) / sigma_allow
+        # Ensure thickness is non-negative
+        t = max(0, t)
+        # Calculate volume of tank wall (cylinder + two hemispheres)
+        wall_volume = 2 * np.pi * radius_local * length_local * t
+        cap_volume = 2 * (2 * np.pi * radius_local**2 * t) # Hemispherical caps
+        total_volume = wall_volume + cap_volume
+        # Calculate mass from volume and material density
+        return total_volume * rho_material, t  # return mass and thickness
+
+    # Calculate dry masses and wall thicknesses for LOX and Fuel tanks
+    lox_mass_tank, lox_t = tank_mass(radius, lox_length)
+    fuel_mass_tank, fuel_t = tank_mass(radius, fuel_length)
+
+    # --- Calculate Wing Position X ---
+    # Position the wing such that its root trailing edge aligns with the calculated fuselage end.
+    # The end of the fuselage is at x = fuselage_length_calc.
+    # The trailing edge of the wing root is at x = wing_position_x_calc + wing_root_chord.
+    # So, wing_position_x + wing_root_chord = fuselage_length_calc
+    # Solving for wing_position_x_calc:
+    wing_position_x_calc = fuselage_length_calc - wing_root_chord
+
+
+    # compute wing area / AR for summary
+    S_single_wing_half = (wing_root_chord + wing_tip_chord) * (wing_span / 2) / 2
+    S_total_wing_area_calc = S_single_wing_half * 2
+    AR_calc = wing_span**2 / S_total_wing_area_calc if S_total_wing_area_calc > 0 else 0
+    taper_calc = wing_tip_chord / wing_root_chord if wing_root_chord != 0 else 0
+
+    # --- Basic Mass Properties Estimation ---
+    # These are very simplified estimations. Real mass estimation is complex and depends heavily on design details.
+
+    # --- Mass Estimating Relationships (MERs) Placeholder ---
+    # In a more advanced model, Mass Estimating Relationships (MERs) would be used here.
+    # MERs are statistical formulas derived from historical data of similar vehicles.
+    # They relate the mass of a component (like wings, fuselage, engine, landing gear, etc.)
+    # to its key design parameters and performance requirements (e.g., wing mass based on area,
+    # aspect ratio, sweep, load factor; fuselage mass based on length, diameter, pressure,
+    # bending moment; engine mass based on thrust, Isp, chamber pressure).
+    # Using MERs provides more realistic mass estimations than simple volume/area scaling.
+    # This section serves as a placeholder to integrate such MERs in the future.
+    # For now, we use simplified calculations below.
+
+    # Fuselage shell mass (simplified as a thin cylinder/cone shell)
+    # Assume an average thickness for the fuselage skin.
+    fuselage_skin_thickness = 0.005 # 5 mm (example thickness)
+    # Calculate surface area of the cylindrical part of the fuselage
+    fuselage_surface_area_cyl = (2 * np.pi * radius * (fuselage_length_calc - nose_length))
+    # Add simplified nose cone surface area (cone lateral surface area formula)
+    nose_slant_height = np.sqrt(nose_length**2 + radius**2)
+    nose_surface_area = np.pi * radius * nose_slant_height
+    total_fuselage_surface_area = fuselage_surface_area_cyl + nose_surface_area
+    # Estimate fuselage dry mass from surface area, thickness, and material density
+    fuselage_dry_mass = total_fuselage_surface_area * fuselage_skin_thickness * rho_material
+
+    # Wing mass (using the new "Wing Structural Mass per Area" slider)
+    # wing_dry_mass = wing_volume_approx * rho_material * wing_structure_factor # Old calculation
+    wing_dry_mass = S_total_wing_area_calc * wing_mass_per_area # New calculation based on slider
+
+    # Engine mass (simplified as a fraction of thrust or scaled by size)
+    # This is a very rough estimate. A more accurate one would depend on engine type and thrust.
+    # Example: Assume engine mass is proportional to its volume or a fixed value per meter of length.
+    engine_density_approx = 5000 # kg/m^3 (example average density of engine components)
+    # Need to calculate eng_radius before using it
+    eng_radius = radius * 0.6
+    engine_volume_approx = np.pi * eng_radius**2 * engine_length
+    engine_dry_mass = engine_volume_approx * engine_density_approx # Very rough estimate
+
+    # Total Dry Mass (Structure, tanks, engine, payload bay structure, avionics, landing gear, etc.)
+    # This should ideally include payload bay structure, landing gear, avionics, etc.
+    # For simplicity, we'll sum calculated components and add a placeholder for "Other Dry Mass".
+    # Let's assume "Other Dry Mass" is a percentage of Payload Mass for this basic model.
+    other_dry_mass_factor = 0.2 # Example: Other dry mass is 20% of Payload Mass
+    other_dry_mass = payload_mass * other_dry_mass_factor # Very rough
+
+    total_structural_mass = lox_mass_tank + fuel_mass_tank + fuselage_dry_mass + wing_dry_mass + engine_dry_mass + other_dry_mass # Sum of calculated dry components + other
+    # Total Dry Mass is the mass of the vehicle structure and systems, excluding the payload.
+    total_dry_mass = total_structural_mass
+
+    # GLOW (Gross Lift-Off Weight) = Total Dry Mass + Total Propellant Mass + Payload Mass
+    glow = total_dry_mass + total_propellant_mass + payload_mass
+
+    # --- plotting figure ---
+    # Direct plot output to the plot output widget
+    with plot_output:
+        fig = plt.figure(figsize=(20,20))
+        ax = fig.add_subplot(111, projection='3d')
+
+        # Helper function to draw a cylinder surface along the x-axis
+        def cylinder_along_x(x_start, x_end, r, n_x=80, n_theta=60):
+            x = np.linspace(x_start, x_end, n_x)
+            theta = np.linspace(0, 2*np.pi, n_theta)
+            X, Theta = np.meshgrid(x, theta)
+            Y = r * np.cos(Theta)
+            Z = r * np.sin(Theta)
+            return X, Y, Z
+
+        # Draw main fuselage (cylinder) - Extends from nose end to fuselage_length_calc
+        fus_x, fus_y, fus_z = cylinder_along_x(nose_length, fuselage_length_calc, radius)
+        ax.plot_surface(fus_x, fus_y, fus_z, color='lightgray', alpha=opacity, rstride=4, cstride=4, linewidth=0)
+
+        # Nose cone (conical approximation) - Extends from x=0 to nose_length
+        n_theta = 80
+        theta = np.linspace(0, 2*np.pi, n_theta)
+        x_nose = np.linspace(0, nose_length, 40)
+        Xn, Thn = np.meshgrid(x_nose, theta)
+        # Radius tapers from fus_radius at base of nose (x=nose_length) to 0 at tip (x=0)
+        Rn = (Xn / nose_length) * radius
+        Yn = Rn * np.cos(Thn)
+        Zn = Rn * np.sin(Thn)
+        ax.plot_surface(Xn, Yn, Zn, color='lightgray', alpha=opacity, rstride=4, cstride=4, linewidth=0)
+
+        # Engine (small cylinder at tail) - Positioned at the end of the calculated fuselage length
+        eng_x0 = fuselage_length_calc - engine_length
+        eng_x1 = fuselage_length_calc
+        # eng_radius is calculated earlier
+        eng_x, eng_y, eng_z = cylinder_along_x(eng_x0, eng_x1, eng_radius)
+        ax.plot_surface(eng_x, eng_y, eng_z, color='gray', alpha=opacity, rstride=4, cstride=4, linewidth=0)
+
+        # LOX tank (internal cylinder) - Positioned at lox_start
+        lox_x0 = lox_start
+        lox_x1 = lox_start + lox_length
+        if lox_length > 0:
+            lox_rad = radius * 0.92 # Slightly smaller radius to appear internal
+            lox_xs, lox_ys, lox_zs = cylinder_along_x(lox_x0, lox_x1, lox_rad)
+            # Use alpha=0.7 for internal components to be more visible
+            ax.plot_surface(lox_xs, lox_ys, lox_zs, color='blue', alpha=0.7, rstride=4, cstride=4, linewidth=0)
+
+        # Fuel tank (internal) - Uses potentially updated current_fuel_start
+        fuel_x0 = current_fuel_start # Use current_fuel_start for plotting
+        fuel_x1 = current_fuel_start + fuel_length # Use current_fuel_start for plotting
+        if fuel_length > 0:
+            fuel_rad = radius * 0.92 # Slightly smaller radius to appear internal
+            fuel_xs, fuel_ys, fuel_zs = cylinder_along_x(fuel_x0, fuel_x1, fuel_rad)
+            # Use alpha=0.7 for internal components
+            ax.plot_surface(fuel_xs, fuel_ys, fuel_zs, color='orange', alpha=0.7, rstride=4, cstride=4, linewidth=0)
+
+        # Payload bay box (centerline on fuselage axis) - Positioned at payload_start
+        pb_x0 = payload_start
+        pb_x1 = payload_start + payload_length
+        pb_y0 = -payload_width/2
+        pb_y1 = payload_width/2
+        pb_z0 = -payload_height/2
+        pb_z1 = payload_height/2
+
+        # Helper function to draw the faces of a box using plot_surface
+        def plot_box_faces(ax, x0, x1, y0, y1, z0, z1, color='purple', alpha=0.7):
+            # draw faces using plot_surface — keep it simple and borderless
+            xs = np.array([[x0, x1],[x0, x1]])
+            ys = np.array([[y0, y0],[y1, y1]])
+            zs = np.array([[z0, z0],[z0, z0]])
+            ax.plot_surface(xs, ys, zs, color=color, alpha=alpha, linewidth=0)  # bottom
+            zs = np.array([[z1, z1],[z1, z1]])
+            ax.plot_surface(xs, ys, zs, color=color, alpha=alpha, linewidth=0)  # top
+            # sides
+            xs = np.array([[x0, x0],[x1, x1]])
+            ys = np.array([[y0, y0],[y0, y0]])
+            zs = np.array([[z0, z1],[z0, z1]])
+            ax.plot_surface(xs, ys, zs, color=color, alpha=alpha, linewidth=0)
+            ys = np.array([[y1, y1],[y1, y1]])
+            ax.plot_surface(xs, ys, zs, color=color, alpha=alpha, linewidth=0)
+
+        # Draw the payload bay box
+        plot_box_faces(ax, pb_x0, pb_x1, pb_y0, pb_y1, pb_z0, pb_z1, color='purple', alpha=opacity)
+
+        # --- Wing geometry (Shuttle-style trapezoidal) ---
+        half_span = wing_span / 2.0
+        tip_le_x_offset = half_span * np.tan(wing_sweep_rad)
+        wing_position_x_calc = fuselage_length_calc - wing_root_chord
+        tip_le_x = wing_position_x_calc + tip_le_x_offset
+
+        avg_chord = (wing_root_chord + wing_tip_chord) / 2.0
+        wing_thickness = avg_chord * wing_thickness_ratio
+
+        # define right wing points (place root at y=radius, z=wing_attach_z)
+        # attach wing along the fuselage side at the specified Z position
+        RL = np.array([wing_position_x_calc, radius, wing_attach_z]) # Root Leading edge point
+        RT = np.array([wing_position_x_calc + wing_root_chord, radius, wing_attach_z]) # Root Trailing edge point
+        # Apply dihedral relative to the attachment point Z
+        TL = np.array([tip_le_x, radius + half_span, wing_attach_z + np.tan(wing_dihedral_rad) * half_span]) # Tip Leading edge point
+        TT = np.array([tip_le_x + wing_tip_chord, radius + half_span, wing_attach_z + np.tan(wing_dihedral_rad) * half_span]) # Tip Trailing edge point
+
+        # thickness offsets (symmetric about local z axis of the wing)
+        # Adjust Z offsets relative to the new base Z (wing_attach_z)
+        topR = RL + np.array([0.0, 0.0, wing_thickness/2.0])
+        botR = RL - np.array([0.0, 0.0, wing_thickness/2.0])
+        topRT = RT + np.array([0.0, 0.0, wing_thickness/2.0])
+        botRT = RT - np.array([0.0, 0.0, wing_thickness/2.0])
+        topTL = TL + np.array([0.0, 0.0, wing_thickness/2.0])
+        botTL = TL - np.array([0.0, 0.0, wing_thickness/2.0])
+        topTT = TT + np.array([0.0, 0.0, wing_thickness/2.0])
+        botTT = TT - np.array([0.0, 0.0, wing_thickness/2.0])
+
+        # Helper function to draw quadrilateral surfaces
+        def quad_surface(ax, p1, p2, p3, p4, color='saddlebrown', alpha=0.7):
+            X = np.array([[p1[0], p2[0]],[p4[0], p3[0]]])
+            Y = np.array([[p1[1], p2[1]],[p4[1], p3[1]]])
+            Z = np.array([[p1[2], p2[2]],[p4[2], p3[2]]])
+            ax.plot_surface(X, Y, Z, color=color, alpha=alpha, linewidth=0)
+
+        # Draw right wing surfaces (top, bottom, front, rear, tip)
+        quad_surface(ax, topR, topRT, topTT, topTL, color='saddlebrown', alpha=opacity) # Top surface
+        quad_surface(ax, botR, botRT, botTT, botTL, color='saddlebrown', alpha=opacity) # Bottom surface
+        # Side faces (simplified)
+        quad_surface(ax, topR, botR, botRT, topRT, color='saddlebrown', alpha=opacity)  # Root face
+        quad_surface(ax, topTL, botTL, botTT, topTT, color='saddlebrown', alpha=opacity)  # Tip face
+        quad_surface(ax, topR, topTL, botTL, botR, color='saddlebrown', alpha=opacity) # Leading edge face
+        quad_surface(ax, topRT, topTT, botTT, botRT, color='saddlebrown', alpha=opacity) # Trailing edge face
+
+
+        # mirror to left wing (negate y coordinates)
+        def mirror_y(point):
+            return np.array([point[0], -point[1], point[2]])
+        quad_surface(ax, mirror_y(topR), mirror_y(topRT), mirror_y(topTT), mirror_y(topTL), color='saddlebrown', alpha=opacity)
+        quad_surface(ax, mirror_y(botR), mirror_y(botRT), mirror_y(botTT), mirror_y(botTL), color='saddlebrown', alpha=opacity)
+        quad_surface(ax, mirror_y(topR), mirror_y(botR), mirror_y(botRT), mirror_y(topRT), color='saddlebrown', alpha=opacity)
+        quad_surface(ax, mirror_y(topTL), mirror_y(botTL), mirror_y(botTT), mirror_y(topTT), color='saddlebrown', alpha=opacity)
+        quad_surface(ax, mirror_y(topR), mirror_y(topTL), mirror_y(botTL), mirror_y(botR), color='saddlebrown', alpha=opacity)
+        quad_surface(ax, mirror_y(topRT), mirror_y(topTT), mirror_y(botTT), mirror_y(botRT), color='saddlebrown', alpha=opacity)
+
+
+        # --- Vertical Stabilizer Geometry (Simple Trapezoid) ---
+        # Position the vertical stabilizer at the rear of the fuselage, on the centerline (y=0)
+        # Base of the stabilizer will be on top of the fuselage (z = radius)
+        # tail_height = fuselage_diameter * 1.2 # Example height relative to fuselage diameter # Now using slider
+        # tail_root_chord = engine_length * 1.5 # Example root chord length # Now using slider
+        # tail_tip_chord = tail_root_chord * 0.6 # Example tip chord (tapered) # Now using slider
+        # tail_sweep_deg = 30.0 # Example sweep angle for the leading edge # Now using slider
+        # tail_thickness_ratio = 0.08 # Example thickness ratio # Now using slider
+
+        # Calculate tail position (root leading edge) - placed relative to the fuselage end
+        tail_position_x = fuselage_length_calc + tail_pos_rel_end # Use slider for relative position
+        # tail_attach_z = radius # Attach to the top of the fuselage # Now using slider
+
+        # Calculate tip leading edge x-position considering sweep
+        tail_half_span = tail_height # Vertical span (height) # Corrected: half_span is just height for vertical stab
+        tail_tip_le_x_offset = tail_half_span * np.tan(tail_sweep_rad)
+        tail_tip_le_x = tail_position_x + tail_tip_le_x_offset
+
+        # Calculate tail thickness based on ratio and root chord
+        tail_thickness_calc = tail_root_chord * tail_thickness_ratio
+
+        # Define the 4 corner points of the vertical stabilizer (in the x-z plane for y=0)
+        # Root Leading Edge (RLE): at fuselage top, centerline
+        RLE = np.array([tail_position_x, 0.0, tail_attach_z]) # Use slider for attach_z
+        # Root Trailing Edge (RTE): at fuselage top, centerline
+        RTE = np.array([tail_position_x + tail_root_chord, 0.0, tail_attach_z]) # Use slider for root_chord
+        # Tip Leading Edge (TLE): at tip height, centerline
+        TLE = np.array([tail_tip_le_x, 0.0, tail_attach_z + tail_height]) # Use slider for height and attach_z
+        # Tip Trailing Edge (TTE): at tip height, centerline
+        TTE = np.array([tail_tip_le_x + tail_tip_chord, 0.0, tail_attach_z + tail_height]) # Use slider for tip_chord and height/attach_z
+
+        # Create a small thickness in the y-direction for the vertical stabilizer
+        tail_thickness_y = tail_thickness_calc # Use calculated tail thickness
+
+        # Define points with thickness (offset in y)
+        RLE_p = RLE + np.array([0.0, tail_thickness_y/2.0, 0.0]) # Plus y offset
+        RLE_m = RLE - np.array([0.0, tail_thickness_y/2.0, 0.0]) # Minus y offset
+        RTE_p = RTE + np.array([0.0, tail_thickness_y/2.0, 0.0])
+        RTE_m = RTE - np.array([0.0, tail_thickness_y/2.0, 0.0])
+        TLE_p = TLE + np.array([0.0, tail_thickness_y/2.0, 0.0])
+        TLE_m = TLE - np.array([0.0, tail_thickness_y/2.0, 0.0])
+        TTE_p = TTE + np.array([0.0, tail_thickness_y/2.0, 0.0])
+        TTE_m = TTE - np.array([0.0, tail_thickness_y/2.0, 0.0])
+
+        # Draw the surfaces of the vertical stabilizer (using quad_surface helper)
+        # Side 1 (positive y side)
+        quad_surface(ax, RLE_p, RTE_p, TTE_p, TLE_p, color='dimgray', alpha=opacity)
+        # Side 2 (negative y side)
+        quad_surface(ax, RLE_m, RTE_m, TTE_m, TLE_m, color='dimgray', alpha=opacity)
+        # Root face (bottom)
+        quad_surface(ax, RLE_p, RTE_p, RTE_m, RLE_m, color='dimgray', alpha=opacity)
+        # Tip face (top)
+        quad_surface(ax, TLE_p, TTE_p, TTE_m, TLE_m, color='dimgray', alpha=opacity)
+        # Leading edge face
+        quad_surface(ax, RLE_p, TLE_p, TLE_m, RLE_m, color='dimgray', alpha=opacity)
+        # Trailing edge face
+        quad_surface(ax, RTE_p, TTE_p, TTE_m, RTE_m, color='dimgray', alpha=opacity)
+
+
+        # --- Landing Gear (Simplified Cylinders) ---
+        gear_radius = radius * 0.1 # Example radius for landing gear struts
+        gear_length = radius * 1.0 # Example length for landing gear struts
+        wheel_radius = gear_radius * 2.0 # Example radius for wheels
+        wheel_thickness = gear_radius * 0.8 # Example thickness for wheels
+
+        # Helper function to draw a cylinder along the z-axis
+        def cylinder_along_z(z_start, z_end, r, n_z=20, n_theta=30):
+            z = np.linspace(z_start, z_end, n_z)
+            theta = np.linspace(0, 2*np.pi, n_theta)
+            Z, Theta = np.meshgrid(z, theta)
+            X = r * np.cos(Theta)
+            Y = r * np.sin(Theta)
+            return X, Y, Z
+
+        # Helper function to draw a cylinder along the y-axis
+        def cylinder_along_y(y_start, y_end, r, n_y=20, n_theta=30):
+            y = np.linspace(y_start, y_end, n_y)
+            theta = np.linspace(0, 2*np.pi, n_theta)
+            Y, Theta = np.meshgrid(y, theta)
+            X = r * np.cos(Theta)
+            Z = r * np.sin(Theta)
+            return X, Y, Z
+
+
+        # Nose Gear Strut (cylinder along Z)
+        ng_strut_x, ng_strut_y, ng_strut_z = cylinder_along_z(-gear_length, 0, gear_radius)
+        # Translate to position
+        ng_strut_x += nose_gear_pos_x
+        ng_strut_y += 0.0
+        ng_strut_z += -radius
+        ax.plot_surface(ng_strut_x, ng_strut_y, ng_strut_z, color='black', alpha=opacity, linewidth=0)
+
+        # Nose Gear Wheel (cylinder along Y) - positioned at the bottom of the strut
+        ng_wheel_x, ng_wheel_y, ng_wheel_z = cylinder_along_y(-wheel_thickness/2, wheel_thickness/2, wheel_radius)
+        # Translate to position
+        ng_wheel_x += nose_gear_pos_x
+        ng_wheel_y += 0.0
+        ng_wheel_z += -radius - gear_length
+        ax.plot_surface(ng_wheel_x, ng_wheel_y, ng_wheel_z, color='black', alpha=opacity, linewidth=0)
+
+
+        # Main Landing Gear Struts (cylinders along Z)
+        # Left Main Gear
+        mg_left_strut_x, mg_left_strut_y, mg_left_strut_z = cylinder_along_z(-gear_length, 0, gear_radius)
+        # Translate to position
+        mg_left_strut_x += main_gear_pos_x
+        mg_left_strut_y += -main_gear_pos_y
+        mg_left_strut_z += -radius
+        ax.plot_surface(mg_left_strut_x, mg_left_strut_y, mg_left_strut_z, color='black', alpha=opacity, linewidth=0)
+
+        # Right Main Gear
+        mg_right_strut_x, mg_right_strut_y, mg_right_strut_z = cylinder_along_z(-gear_length, 0, gear_radius)
+        # Translate to position
+        mg_right_strut_x += main_gear_pos_x
+        mg_right_strut_y += main_gear_pos_y
+        mg_right_strut_z += -radius
+        ax.plot_surface(mg_right_strut_x, mg_right_strut_y, mg_right_strut_z, color='black', alpha=opacity, linewidth=0)
+
+        # Main Landing Gear Wheels (cylinders along Y)
+        # Left Main Wheel
+        mg_left_wheel_x, mg_left_wheel_y, mg_left_wheel_z = cylinder_along_y(-wheel_thickness/2, wheel_thickness/2, wheel_radius)
+        # Translate to position
+        mg_left_wheel_x += main_gear_pos_x
+        mg_left_wheel_y += -main_gear_pos_y
+        mg_left_wheel_z += -radius - gear_length
+        ax.plot_surface(mg_left_wheel_x, mg_left_wheel_y, mg_left_wheel_z, color='black', alpha=opacity, linewidth=0)
+
+        # Right Main Wheel
+        mg_right_wheel_x, mg_right_wheel_y, mg_right_wheel_z = cylinder_along_y(-wheel_thickness/2, wheel_thickness/2, wheel_radius)
+        # Translate to position
+        mg_right_wheel_x += main_gear_pos_x
+        mg_right_wheel_y += main_gear_pos_y
+        mg_right_wheel_z += -radius - gear_length
+        ax.plot_surface(mg_right_wheel_x, mg_right_wheel_y, mg_right_wheel_z, color='black', alpha=opacity, linewidth=0)
+
+
+        # labels and camera
+        ax.set_xlabel("Length (m)")
+        ax.set_ylabel("Lateral (m)")
+        ax.set_zlabel("Vertical (m)")
+
+        # set limits and equalise aspect ratio
+        x_min = -nose_length*0.1
+        # Use calculated fuselage length for x_max
+        x_max = fuselage_length_calc + 1.0
+        y_max = wing_span * 0.6 + radius # Consider wing span
+        # Adjust y_max to include main landing gear lateral position
+        y_max = max(y_max, main_gear_pos_y + wheel_radius) + radius * 0.2 # Add padding
+
+        # Adjust z_max and z_min to accommodate different wing attachment Z, tail fin height, and landing gear
+        z_span = max(payload_height/2, wing_thickness/2) + abs(wing_attach_z) + wing_span * np.tan(abs(wing_dihedral_rad)) * 0.5 # Consider wing span and dihedral
+        z_tail_max = tail_attach_z + tail_height # Max Z reached by the tail fin # Use slider values
+        z_max = max(z_span, z_tail_max) + radius * 0.5 # Add some padding above
+        # Consider the lowest point of the landing gear
+        z_gear_min = -radius - gear_length - wheel_radius # Lowest point of the wheel
+        z_min = min(-z_span - radius * 0.5, z_gear_min - radius*0.2) # Add padding below
+
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(-y_max, y_max)
+        ax.set_zlim(z_min, z_max)
+        # Ensure equal scaling for correct proportions
+        set_axes_equal(ax)
+
+        # Set viewing angle: nose closer (we placed nose at small x), left side toward viewer, right wing away
+        # Adjust elev (elevation) and azim (azimuth) to get a good view
+        ax.view_init(elev=18, azim=120)
+
+        # Legend proxies for colored components
+        from matplotlib.patches import Patch
+        legend_elems = [
+            Patch(facecolor='lightgray', edgecolor='k', label='Fuselage / Nose'),
+            Patch(facecolor='blue', edgecolor='k', label='LOX Tank'),
+            Patch(facecolor='orange', edgecolor='k', label='Fuel Tank'),
+            Patch(facecolor='purple', edgecolor='k', label='Payload Bay'),
+            Patch(facecolor='saddlebrown', edgecolor='k', label='Wings'),
+            Patch(facecolor='dimgray', edgecolor='k', label='Tail Fin'),
+            Patch(facecolor='black', edgecolor='k', label='Landing Gear') # Added Landing Gear to legend
+        ]
+        # Position the legend
+        ax.legend(handles=legend_elems, loc='upper left', bbox_to_anchor=(0.02, 0.98))
+
+        plt.tight_layout()
+        plt.show()
+
+    # build HTML summary string and place into the HTML output widget
+    # Include calculated mass properties in the summary
+    html = build_summary_html(
+        # Pass the calculated fuselage length
+        fuselage_length_calc=fuselage_length_calc,
+        fuselage_diameter=fuselage_diameter,
+        nose_length=nose_length,
+        nose_shape=nose_shape,
+        engine_length=engine_length,
+        propellant_type=propellant_type,
+        total_propellant_mass=total_propellant_mass,
+        lox_mass=lox_mass,
+        lh2_mass=locals().get('lh2_mass', 0.0), # Use .get with default 0.0 in case lh2_mass isn't defined
+        fuel_mass=fuel_mass,
+        fuel_density=fuel_density,
+        lox_length=lox_length,
+        fuel_length=fuel_length,
+        # tank masses and thickness (converted to mm)
+        lox_mass_tank=lox_mass_tank,
+        lox_t_mm=lox_t * 1000.0,
+        fuel_mass_tank=fuel_mass_tank,
+        fuel_t_mm=fuel_t * 1000.0,
+        total_tank_mass=(lox_mass_tank + fuel_mass_tank), # Pass total tank mass
+        # Pass calculated mass properties
+        payload_mass=payload_mass,
+        fuselage_dry_mass=fuselage_dry_mass,
+        wing_dry_mass=wing_dry_mass, # Pass calculated wing dry mass
+        engine_dry_mass=engine_dry_mass,
+        total_dry_mass=total_dry_mass, # Pass total dry mass
+        glow=glow, # Pass GLOW
+        wing_position_x=wing_position_x_calc, # Use calculated wing_position_x
+        wing_span=wing_span,
+        wing_root_chord=wing_root_chord,
+        wing_tip_chord=wing_tip_chord,
+        wing_sweep_deg=wing_sweep_deg,
+        wing_dihedral_deg=wing_dihedral_deg, # Pass dihedral to summary
+        wing_attach_z=wing_attach_z, # Pass attachment Z to summary
+        wing_thickness_ratio=wing_thickness_ratio,
+        S_total_wing_area_calc=S_total_wing_area_calc,
+        AR_calc=AR_calc,
+        wing_mass_per_area=wing_mass_per_area, # Pass wing mass per area to summary
+        # Pass vertical stabilizer properties to summary
+        tail_height=tail_height,
+        tail_root_chord=tail_root_chord,
+        tail_tip_chord=tail_tip_chord,
+        tail_sweep_deg=tail_sweep_deg,
+        tail_thickness_ratio=tail_thickness_ratio,
+        tail_attach_z=tail_attach_z,
+        tail_pos_rel_end=tail_pos_rel_end # Pass tail position relative to end
+    )
+    html_output.value = html
+
+# --- UI Layout ---
+# Define default values for sliders to use in range calculations
+default_fuselage_diameter = 2.0
+default_wing_span = 10.0 # Define default wing_span
+default_radius = default_fuselage_diameter / 2.0
+default_engine_length = 1.5 # Define default engine_length
+
+# Define default tail properties for slider ranges
+default_tail_height = default_fuselage_diameter * 1.2
+default_tail_root_chord = default_engine_length * 1.5
+default_tail_tip_chord = default_tail_root_chord * 0.6
+
+
+# Create VBox for sliders (inputs)
+sliders_box = VBox([
+    Label("Input Parameters:"),
+    # Remove Fuselage Length slider as it's now calculated
+    FloatSlider(min=1, max=5, step=0.1, value=default_fuselage_diameter, description='Fuselage D (m)'),
+    FloatSlider(min=0.5, max=10, step=0.1, value=3, description='Nose L (m)'),
+    Dropdown(options=['Conical'], value='Conical', description='Nose Shape:'),
+    FloatSlider(min=10, max=10000, step=10, value=1000.0, description='Payload (kg)'), # Added Payload slider
+    FloatSlider(min=0.0, max=40.0, step=0.1, value=3.0, description='Payload Start (m)'),
+    FloatSlider(min=0.5, max=10, step=0.1, value=2, description='Payload L (m)'), # Keep payload length slider
+    FloatSlider(min=0.1, max=5.0, step=0.1, value=1.5, description='Payload Width (m)'),
+    FloatSlider(min=0.1, max=5.0, step=0.1, value=1.5, description='Payload Height (m)'),
+    FloatSlider(min=1000, max=100000, step=100, value=10000.0, description='Total Prop Mass (kg)'),
+    Dropdown(options=['LH2/LOx', 'LCH4/LOx'], value='LH2/LOx', description='Propellant'),
+    FloatSlider(min=0.0, max=45, step=0.5, value=6.0, description='LOX Start (m)'), # LOX Start Slider
+    FloatSlider(min=0.5, max=20.0, step=0.1, value=5.0, description='LOX Length (m)'), # Added LOX Length Slider
+    FloatSlider(min=0.0, max=45, step=0.5, value=9.5, description='Fuel Start (m)'), # Fuel Start Slider
+    FloatSlider(min=0.5, max=30.0, step=0.1, value=10.0, description='Fuel Length (m)'), # Added Fuel Length Slider
+    FloatSlider(min=0.5, max=5, step=0.1, value=default_engine_length, description='Engine L (m)'), # Use default_engine_length
+    Checkbox(value=False, description='Link Tanks'),
+    FloatSlider(min=0.01, max=5.0, step=0.01, value=0.2, description='Tank Pressure (MPa)'),
+    Label("Wing Properties:"), # Label for wing sliders
+    FloatSlider(min=1.0, max=30.0, step=0.5, value=default_wing_span, description='Wing Span (m)'), # Use default_wing_span
+    FloatSlider(min=1.0, max=15.0, step=0.1, value=6.0, description='Wing Root Chord (m)'),
+    FloatSlider(min=0.1, max=10.0, step=0.1, value=1.5, description='Wing Tip Chord (m)'),
+    FloatSlider(min=0.0, max=60.0, step=1.0, value=45.0, description='Wing Sweep (deg)'),
+    FloatSlider(min=-30.0, max=30.0, step=0.5, value=5.0, description='Wing Dihedral (deg)'), # Added dihedral slider
+    FloatSlider(min=0.01, max=0.3, step=0.005, value=0.1, description='Wing Thickness Ratio'),
+    FloatSlider(min=-default_radius*1.5, max=default_radius*1.5, step=0.1, value=0.0, description='Wing Attach Z (m)'), # Added attach Z slider, using default_radius for range
+    FloatSlider(min=10.0, max=100.0, step=1.0, value=50.0, description='Wing Mass per Area (kg/m²)'), # New Wing Mass per Area slider
+    Label("Vertical Stabilizer:"), # New label for vertical stabilizer sliders
+    FloatSlider(min=0.5, max=10.0, step=0.1, value=default_tail_height, description='Tail Height (m)'), # New Tail Height slider
+    FloatSlider(min=0.5, max=10.0, step=0.1, value=default_tail_root_chord, description='Tail Root Chord (m)'), # New Tail Root Chord slider
+    FloatSlider(min=0.1, max=5.0, step=0.1, value=default_tail_tip_chord, description='Tail Tip Chord (m)'), # New Tail Tip Chord slider
+    FloatSlider(min=0.0, max=60.0, step=1.0, value=30.0, description='Tail Sweep (deg)'), # New Tail Sweep slider
+    FloatSlider(min=0.01, max=0.3, step=0.005, value=0.08, description='Tail Thickness Ratio'), # New Tail Thickness Ratio slider
+    FloatSlider(min=-default_radius*1.5, max=default_radius*2.0, step=0.1, value=default_radius, description='Tail Attach Z (m)'), # New Tail Attach Z slider
+    FloatSlider(min=-5.0, max=5.0, step=0.1, value=-2.3, description='Tail Pos rel. End (m)'), # New Tail Position relative to End slider
+    Label("Landing Gear Positions:"), # New label for landing gear sliders
+    FloatSlider(min=0.0, max=10.0, step=0.1, value=4.0, description='Nose Gear X (m)'), # Nose gear X slider
+    FloatSlider(min=10.0, max=40.0, step=0.1, value=15.0, description='Main Gear X (m)'), # Main gear X slider
+    FloatSlider(min=default_radius + 0.5, max=default_wing_span/2.0 + default_radius, step=0.1, value=default_radius + 0.5, description='Main Gear Y (m)'), # Main gear Y slider (lateral), use default_wing_span and default_radius
+    FloatSlider(min=0.1, max=1.0, step=0.05, value=0.4, description='Opacity')
+], layout=widgets.Layout(width='25%', overflow='auto', max_height='1200px'))
+
+# center & right boxes for display
+center_box = VBox([Label("Design Parameters Summary:"), html_output], layout=widgets.Layout(width='25%', padding='8px', max_height='1200px'))
+right_box = VBox([Label("3D Visualization:"), plot_output], layout=widgets.Layout(width='50%', max_height='800px'))
+
+# Create HBox layout for entire UI: sliders left, summary center, 3D right
+interact_ui = HBox([sliders_box, center_box, right_box],
+                   layout=widgets.Layout(justify_content='space-between', align_items='flex-start', width='100%'))
+
+# Link the interact function to the sliders (indices match the children ordering)
+# Use `interactive` instead of `interact` and then manually display the UI
+interactive_widget = interactive(
+    plot_spaceplane_fuselage_3d,
+    fuselage_diameter=sliders_box.children[1],
+    nose_length=sliders_box.children[2],
+    nose_shape=sliders_box.children[3],
+    payload_mass=sliders_box.children[4],
+    payload_start=sliders_box.children[5],
+    payload_length=sliders_box.children[6],
+    payload_width=sliders_box.children[7],
+    payload_height=sliders_box.children[8],
+    total_propellant_mass=sliders_box.children[9],
+    propellant_type=sliders_box.children[10],
+    lox_start=sliders_box.children[11],
+    lox_length=sliders_box.children[12],
+    fuel_start=sliders_box.children[13],
+    fuel_length=sliders_box.children[14],
+    engine_length=sliders_box.children[15],
+    link_tanks=sliders_box.children[16],
+    tank_pressure_mpa=sliders_box.children[17],
+    wing_span=sliders_box.children[19], # Index adjusted due to new label
+    wing_root_chord=sliders_box.children[20], # Index adjusted
+    wing_tip_chord=sliders_box.children[21], # Index adjusted
+    wing_sweep_deg=sliders_box.children[22], # Index adjusted
+    wing_dihedral_deg=sliders_box.children[23], # Index adjusted
+    wing_thickness_ratio=sliders_box.children[24], # Index adjusted
+    wing_attach_z=sliders_box.children[25], # Index adjusted
+    wing_mass_per_area=sliders_box.children[26], # New slider index
+    tail_height=sliders_box.children[28], # Index adjusted for new tail sliders
+    tail_root_chord=sliders_box.children[29], # Index adjusted
+    tail_tip_chord=sliders_box.children[30], # Index adjusted
+    tail_sweep_deg=sliders_box.children[31], # Index adjusted
+    tail_thickness_ratio=sliders_box.children[32], # Index adjusted
+    tail_attach_z=sliders_box.children[33], # Index adjusted
+    tail_pos_rel_end=sliders_box.children[34], # New slider index
+    nose_gear_pos_x=sliders_box.children[36], # Index adjusted for new landing gear label
+    main_gear_pos_x=sliders_box.children[37], # Index adjusted
+    main_gear_pos_y=sliders_box.children[38], # Index adjusted
+    opacity=sliders_box.children[39] # Index adjusted
+)
+
+# Display the arranged UI z
+display(interact_ui)
+
+# Trigger initial render by calling the update function once
+interactive_widget.update()
